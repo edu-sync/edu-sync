@@ -14,7 +14,7 @@ use edu_ws::{
     ws,
 };
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{serde_as, serde_conv, DisplayFromStr};
 use thiserror::Error;
 use tokio::{
@@ -105,6 +105,32 @@ impl CourseConfigs {
     }
 }
 
+// Expand Tilde to home folder, create the directory if it does not exist and
+// then canonicalize the path.
+pub fn check_dir(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
+    let expanded_path = shellexpand::path::tilde(&path).into_owned();
+    if !expanded_path.try_exists()? {
+        std::fs::create_dir(&expanded_path)?;
+    }
+    std::fs::canonicalize(expanded_path)
+}
+
+// Custom deserializer function to check if the path is absolute and to
+// canonicalize the path
+fn deserialize_absolute_path<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let path_str = String::deserialize(deserializer)?;
+    let path = PathBuf::from(path_str);
+
+    if !path.is_absolute() {
+        return Err(serde::de::Error::custom("Path must be absolute"));
+    }
+
+    check_dir(&path).map_err(|io_err| serde::de::Error::custom(format!("{io_err}")))
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub struct AccountConfig {
@@ -113,6 +139,7 @@ pub struct AccountConfig {
     #[serde(flatten)]
     pub id: Id,
     pub token: Token,
+    #[serde(deserialize_with = "deserialize_absolute_path")]
     pub path: PathBuf,
     #[serde(default)]
     pub courses: CourseConfigs,
